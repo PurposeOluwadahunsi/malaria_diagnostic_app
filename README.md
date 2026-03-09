@@ -1,0 +1,1 @@
+# malaria_diagnostic_app
