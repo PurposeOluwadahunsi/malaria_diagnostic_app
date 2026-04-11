@@ -1,18 +1,4 @@
 # app.py
-"""
-Final corrected Streamlit app for Malaria Risk Detector
-- Ensures prediction state is saved in st.session_state so feedback insert runs after rerun
-- Yes/No inputs (converted to 1/0)
-- Smooth "analyzing" progress animation
-- Battery-style probability display (visual + numeric)
-- Feedback form submit inside st.form that reads prediction from session_state
-- Supabase insertion via REST API with robust logging (terminal + UI debug panel)
-- Removed feature-importance display
-- IMPORTANT: This expects your Supabase table `malaria_feedback` with columns:
-    probability (integer), prediction (text), helpful (text), clinic_result (text), comment (text)
-- Place `Malaria_Diagnostic_Model.pkl` in the same folder as this file.
-- Prefer setting SUPABASE_URL and SUPABASE_ANON_KEY as environment variables for safety.
-"""
 
 import os
 import time
@@ -37,9 +23,7 @@ SUPABASE_ENDPOINT = f"{SUPABASE_URL}/rest/v1/malaria_feedback"
 
 MODEL_PATH = "Malaria_Diagnostic_Model.pkl"
 
-# ----------------------
-# Streamlit page + CSS
-# ----------------------
+
 st.set_page_config(page_title="Malaria Risk Detector", page_icon="🦟", layout="wide")
 
 st.markdown(
@@ -78,7 +62,7 @@ def load_model(path: str = MODEL_PATH):
 model, model_err = load_model()
 
 # ----------------------
-# Feature order (MUST match training)
+# Feature order 
 # ----------------------
 FEATURE_ORDER = [
     "Age",
@@ -95,10 +79,6 @@ FEATURE_ORDER = [
     "Joint_Pain",
     "Sex_Male",
 ]
-
-# ----------------------
-# Helpers
-# ----------------------
 def yesno_to_int(choice: str) -> int:
     return 1 if str(choice).lower() in ("yes", "true", "1") else 0
 
@@ -137,9 +117,6 @@ def supabase_insert(record: Dict[str, Any]) -> Tuple[bool, Dict[str, Any]]:
         print("Supabase insert exception:", str(e))
         return False, {"error": str(e), "trace": traceback.format_exc()}
 
-# ----------------------
-# Initialize session state containers
-# ----------------------
 if "last_prediction" not in st.session_state:
     st.session_state["last_prediction"] = None
 if "last_probability" not in st.session_state:
@@ -157,9 +134,9 @@ def log_debug(msg: str):
     print(msg)  # terminal
     st.session_state["debug_logs"].append(msg)
 
-# ----------------------
-# UI layout
-# ----------------------
+
+# ui layout
+
 left_col, right_col = st.columns([1.2, 1.0])
 
 with left_col:
@@ -199,9 +176,9 @@ with right_col:
     feedback_area = st.empty()
     st.markdown("</div>", unsafe_allow_html=True)
 
-# ----------------------
-# When Analyze is clicked -> run model and store results in session_state
-# ----------------------
+
+# when Analyze is clicked - run model and store results in session_state
+
 if analyze_btn:
     if model_err:
         st.error(f"Model load error: {model_err}")
@@ -254,12 +231,12 @@ if analyze_btn:
                 proba = float(pred)
             prob_pct = int(round(proba * 100))
 
-            # Store prediction in session_state
+            # store prediction in session_state
             st.session_state["last_prediction"] = int(pred)
             st.session_state["last_probability"] = float(proba)
             st.session_state["last_prob_pct"] = int(prob_pct)
 
-            # render result immediately
+            # show result immediately
             risk_label, risk_color = prob_to_risk(proba)
             result_html = f"""
                 <div style="padding:8px;border-radius:6px;">
@@ -289,9 +266,8 @@ if analyze_btn:
             st.error(f"Prediction error: {e}")
             log_debug("Prediction exception: " + traceback.format_exc())
 
-# ----------------------
-# If a previous prediction exists in session_state, show it so feedback can be submitted
-# ----------------------
+# if a previous prediction exists in session_state, show it so feedback can be submitted
+
 if st.session_state.get("last_prediction") is not None:
     # show the last saved prediction/result (so it's visible after rerun)
     last_pred = st.session_state["last_prediction"]
@@ -321,7 +297,7 @@ if st.session_state.get("last_prediction") is not None:
     else:
         advice_area.success("Low likelihood of malaria. If symptoms persist, seek medical care.")
 
-    # Feedback form (submit inside form). Uses session_state values for prediction/probability.
+    # feedback form submit inside form... uses session_state values for prediction or probability.
     with feedback_area.container():
         with st.form("feedback_form"):
             st.write("Was this assessment helpful?")
@@ -332,7 +308,7 @@ if st.session_state.get("last_prediction") is not None:
             submit = st.form_submit_button("Submit feedback")
 
             if submit:
-                # build record matching Supabase table columns
+                # build record matching supabase table columns
                 rec = {
                     "probability": int(st.session_state["last_prob_pct"]),  # integer percent
                     "prediction": "Malaria" if int(st.session_state["last_prediction"]) == 1 else "No Malaria",
@@ -361,9 +337,8 @@ if st.session_state.get("last_prediction") is not None:
                     })
                     st.info("Feedback saved locally for this session only.")
 
-# Show local session feedback if present
+# show local session feedback if present
 if st.session_state["feedback_list"]:
     st.markdown("---")
     st.subheader("Recent feedback (this session)")
     st.dataframe(st.session_state["feedback_list"][::-1], height=200)
-
