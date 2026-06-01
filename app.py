@@ -1,5 +1,3 @@
-# app.py
-
 import os
 import time
 import json
@@ -10,6 +8,12 @@ from typing import Tuple, Dict, Any
 import requests
 import numpy as np
 import streamlit as st
+
+try:
+    from geopy.geocoders import Nominatim
+    GEOPY_AVAILABLE = True
+except ImportError:
+    GEOPY_AVAILABLE = False
 
 # ----------------------
 # Configuration (env preferred)
@@ -22,7 +26,6 @@ SUPABASE_ANON_KEY = os.getenv(
 SUPABASE_ENDPOINT = f"{SUPABASE_URL}/rest/v1/malaria_feedback"
 
 MODEL_PATH = "Malaria_Diagnostic_Model.pkl"
-
 
 st.set_page_config(page_title="Malaria Risk Detector", page_icon="🦟", layout="wide")
 
@@ -37,6 +40,8 @@ st.markdown(
       .battery-inner { height:100%; border-radius:8px; text-align:center; color:white; font-weight:700; line-height:36px; transition: width 0.5s ease; }
       .battery-tip { position:absolute; right:-10px; top:8px; width:4px; height:20px; background:#999; border-radius:2px; }
       .debug-box { background:#f7f7f7; padding:10px; border-radius:6px; font-family:monospace; white-space:pre-wrap; }
+      .hospital-card { background:#f0faf4; border-left:4px solid #0b6e4f; padding:8px 12px; border-radius:4px; margin-bottom:6px; }
+      .urgent-box { background:#fff3cd; border:1px solid #f1c40f; padding:12px; border-radius:8px; margin-top:8px; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -62,23 +67,14 @@ def load_model(path: str = MODEL_PATH):
 model, model_err = load_model()
 
 # ----------------------
-# Feature order 
+# Feature order
 # ----------------------
 FEATURE_ORDER = [
-    "Age",
-    "Fever",
-    "Headache",
-    "Abdominal_Pain",
-    "General_Body_Malaise",
-    "Dizziness",
-    "Vomiting",
-    "Confusion",
-    "Backache",
-    "Chest_pain",
-    "Coughing",
-    "Joint_Pain",
-    "Sex_Male",
+    "Age", "Fever", "Headache", "Abdominal_Pain", "General_Body_Malaise",
+    "Dizziness", "Vomiting", "Confusion", "Backache", "Chest_pain",
+    "Coughing", "Joint_Pain", "Sex_Male",
 ]
+
 def yesno_to_int(choice: str) -> int:
     return 1 if str(choice).lower() in ("yes", "true", "1") else 0
 
@@ -99,10 +95,7 @@ def supabase_insert(record: Dict[str, Any]) -> Tuple[bool, Dict[str, Any]]:
     }
     try:
         resp = requests.post(SUPABASE_ENDPOINT, headers=headers, json=[record], timeout=12)
-        # Terminal logs for debugging
         print("Supabase POST ->", SUPABASE_ENDPOINT)
-        print("Request headers:", {k: v for k, v in headers.items() if k != "apikey"})
-        print("Payload:", json.dumps([record], ensure_ascii=False))
         print("Response status:", resp.status_code)
         print("Response text:", resp.text)
         try:
@@ -117,26 +110,74 @@ def supabase_insert(record: Dict[str, Any]) -> Tuple[bool, Dict[str, Any]]:
         print("Supabase insert exception:", str(e))
         return False, {"error": str(e), "trace": traceback.format_exc()}
 
-if "last_prediction" not in st.session_state:
-    st.session_state["last_prediction"] = None
-if "last_probability" not in st.session_state:
-    st.session_state["last_probability"] = None
-if "last_prob_pct" not in st.session_state:
-    st.session_state["last_prob_pct"] = None
-if "last_features" not in st.session_state:
-    st.session_state["last_features"] = None
-if "debug_logs" not in st.session_state:
-    st.session_state["debug_logs"] = []
-if "feedback_list" not in st.session_state:
-    st.session_state["feedback_list"] = []
+
+# ----------------------
+# Nearby hospitals (OpenStreetMap, no API key)
+# ----------------------
+def geocode_location(location_text: str):
+    if not GEOPY_AVAILABLE:
+        return None, None
+    try:
+        geolocator = Nominatim(user_agent="malaria_risk_detector_app")
+        location = geolocator.geocode(location_text, timeout=10)
+        if location:
+            return location.latitude, location.longitude
+        return None, None
+    except Exception as e:
+        print("Geocoding error:", e)
+        return None, None
+
+def find_nearby_hospitals(lat: float, lon: float, radius_m: int = 5000):
+    overpass_url = "https://overpass-api.de/api/interpreter"
+    query = f"""
+    [out:json];
+    (
+      node["amenity"="hospital"](around:{radius_m},{lat},{lon});
+      node["amenity"="clinic"](around:{radius_m},{lat},{lon});
+      node["amenity"="health_post"](around:{radius_m},{lat},{lon});
+    );
+    out body;
+    """
+    try:
+        response = requests.post(overpass_url, data=query, timeout=15)
+        data = response.json()
+        results = []
+        for element in data.get("elements", []):
+            tags = element.get("tags", {})
+            name = tags.get("name", "Unnamed facility")
+            amenity = tags.get("amenity", "facility").replace("_", " ").title()
+            phone = tags.get("phone", tags.get("contact:phone", ""))
+            results.append({"name": name, "type": amenity, "phone": phone})
+        results = [r for r in results if r["name"] != "Unnamed facility"] or results
+        return results[:5]
+    except Exception as e:
+        print("Overpass error:", e)
+        return []
+
+
+# ----------------------
+# Session state init
+# ----------------------
+for key, default in [
+    ("last_prediction", None),
+    ("last_probability", None),
+    ("last_prob_pct", None),
+    ("last_features", None),
+    ("debug_logs", []),
+    ("feedback_list", []),
+    ("hospitals", []),
+]:
+    if key not in st.session_state:
+        st.session_state[key] = default
 
 def log_debug(msg: str):
-    print(msg)  # terminal
+    print(msg)
     st.session_state["debug_logs"].append(msg)
 
 
-# ui layout
-
+# ----------------------
+# UI layout
+# ----------------------
 left_col, right_col = st.columns([1.2, 1.0])
 
 with left_col:
@@ -171,14 +212,27 @@ with right_col:
     result_area = st.empty()
     battery_area = st.empty()
     advice_area = st.empty()
+    escalation_area = st.empty()
+
+    st.markdown("---")
+    st.subheader("Share your result")
+    share_area = st.empty()
+
+    st.markdown("---")
+    st.subheader("Find nearby hospitals")
+    location_input = st.text_input("Enter your area or city (e.g. Surulere, Lagos)", key="loc_input")
+    find_hospitals_btn = st.button("Search hospitals near me")
+    hospitals_area = st.empty()
+
     st.markdown("---")
     st.subheader("Feedback")
     feedback_area = st.empty()
     st.markdown("</div>", unsafe_allow_html=True)
 
 
-# when Analyze is clicked - run model and store results in session_state
-
+# ----------------------
+# Analyze button logic
+# ----------------------
 if analyze_btn:
     if model_err:
         st.error(f"Model load error: {model_err}")
@@ -190,25 +244,14 @@ if analyze_btn:
         sex_male = 1 if sex == "Male" else 0
         features = [
             int(age),
-            yesno_to_int(fever),
-            yesno_to_int(headache),
-            yesno_to_int(abdominal_pain),
-            yesno_to_int(general_body_malaise),
-            yesno_to_int(dizziness),
-            yesno_to_int(vomiting),
-            yesno_to_int(confusion),
-            yesno_to_int(backache),
-            yesno_to_int(chest_pain),
-            yesno_to_int(coughing),
-            yesno_to_int(joint_pain),
-            sex_male,
+            yesno_to_int(fever), yesno_to_int(headache), yesno_to_int(abdominal_pain),
+            yesno_to_int(general_body_malaise), yesno_to_int(dizziness), yesno_to_int(vomiting),
+            yesno_to_int(confusion), yesno_to_int(backache), yesno_to_int(chest_pain),
+            yesno_to_int(coughing), yesno_to_int(joint_pain), sex_male,
         ]
-
-        # Save feature vector to session so feedback can access it after rerun
         st.session_state["last_features"] = dict(zip(FEATURE_ORDER, features))
-        log_debug("Feature vector: " + json.dumps(st.session_state["last_features"], ensure_ascii=False))
+        log_debug("Feature vector: " + json.dumps(st.session_state["last_features"]))
 
-        # progress animation
         prog = st.progress(0)
         status = st.empty()
         status.info("Analyzing symptoms...")
@@ -218,7 +261,6 @@ if analyze_btn:
         status.empty()
         prog.empty()
 
-        # Prediction
         try:
             X = np.array(features).reshape(1, -1)
             pred = model.predict(X)[0]
@@ -231,49 +273,73 @@ if analyze_btn:
                 proba = float(pred)
             prob_pct = int(round(proba * 100))
 
-            # store prediction in session_state
             st.session_state["last_prediction"] = int(pred)
             st.session_state["last_probability"] = float(proba)
             st.session_state["last_prob_pct"] = int(prob_pct)
-
-            # show result immediately
-            risk_label, risk_color = prob_to_risk(proba)
-            result_html = f"""
-                <div style="padding:8px;border-radius:6px;">
-                    <p style="margin:2px 0;"><strong>Prediction:</strong> {'Malaria' if int(pred) == 1 else 'No Malaria'}</p>
-                    <p style="margin:2px 0;"><strong>Probability:</strong> <span style="font-size:18px">{prob_pct}%</span></p>
-                    <div style="margin-top:6px;"><span class="risk-badge" style="background:{risk_color}">{risk_label}</span></div>
-                </div>
-            """
-            result_area.markdown(result_html, unsafe_allow_html=True)
-
-            battery_html = f"""
-            <div style="margin-top:8px;">
-              <div class="battery">
-                <div class="battery-inner" style="width:{prob_pct}%; background:{risk_color};">{prob_pct}%</div>
-                <div class="battery-tip"></div>
-              </div>
-            </div>
-            """
-            battery_area.markdown(battery_html, unsafe_allow_html=True)
-
-            if int(pred) == 1:
-                advice_area.warning("Possible malaria. Please visit a hospital for diagnostic confirmation.")
-            else:
-                advice_area.success("Low likelihood of malaria. If symptoms persist, seek medical care.")
 
         except Exception as e:
             st.error(f"Prediction error: {e}")
             log_debug("Prediction exception: " + traceback.format_exc())
 
-# if a previous prediction exists in session_state, show it so feedback can be submitted
+
+# ----------------------
+# Display result (always, if prediction exists)
+# ----------------------
+def render_advice(pred: int, prob: float, prob_pct: int):
+    """Return advice and escalation HTML based on prediction and probability."""
+    risk_label, risk_color = prob_to_risk(prob)
+
+    if pred == 1:
+        if prob_pct >= 61:
+            # HIGH RISK — urgent escalation
+            advice = "High malaria risk detected. Do not wait — please go to a hospital or health centre today."
+            escalation = f"""
+            <div class="urgent-box">
+              <strong>🚨 Urgent:</strong> Your risk score is <strong>{prob_pct}%</strong>.
+              This is not a situation to monitor at home. Please seek care <em>today</em>, not tomorrow.
+              Go to the nearest hospital and ask for a malaria rapid diagnostic test (RDT).
+            </div>
+            """
+        else:
+            # MEDIUM RISK
+            advice = "Moderate malaria risk detected. Visit a clinic for a confirmatory test as soon as possible."
+            escalation = f"""
+            <div class="urgent-box">
+              <strong>Note:</strong> A {prob_pct}% probability is not something to ignore.
+              Even if you feel okay right now, malaria symptoms can worsen quickly.
+              Get tested at a pharmacy or clinic before the end of today.
+            </div>
+            """
+    else:
+        if prob_pct <= 15:
+            # VERY LOW still remind them
+            advice = (
+                f"Your symptoms currently suggest a low malaria risk ({prob_pct}%). "
+                "This is not a medical clearance. If you have fever, body pain, or feel unwell, "
+                "still visit a pharmacy or clinic — malaria can be present before all symptoms appear."
+            )
+            escalation = ""
+        else:
+            # LOW-MEDIUM (16–29%) more direct nudge
+            advice = (
+                f"Your risk score is {prob_pct}% — that is low but not zero. "
+                "Low risk does not mean 'no malaria.' If you are experiencing any fever or general body weakness, "
+                "please visit a nearby clinic or pharmacy for a proper malaria test. Do not dismiss the symptoms."
+            )
+            escalation = f"""
+            <div class="urgent-box">
+              <strong>Important:</strong> Many malaria cases in Nigeria start with mild or low-scoring symptoms.
+              A score of {prob_pct}% still warrants a visit to a health facility, especially if you have fever.
+            </div>
+            """
+    return advice, escalation
 
 if st.session_state.get("last_prediction") is not None:
-    # show the last saved prediction/result (so it's visible after rerun)
     last_pred = st.session_state["last_prediction"]
     last_prob_pct = st.session_state["last_prob_pct"]
     last_prob = st.session_state["last_probability"]
     risk_label, risk_color = prob_to_risk(last_prob)
+
     result_html = f"""
         <div style="padding:8px;border-radius:6px;">
             <p style="margin:2px 0;"><strong>Prediction:</strong> {'Malaria' if int(last_pred) == 1 else 'No Malaria'}</p>
@@ -282,6 +348,7 @@ if st.session_state.get("last_prediction") is not None:
         </div>
     """
     result_area.markdown(result_html, unsafe_allow_html=True)
+
     battery_html = f"""
     <div style="margin-top:8px;">
       <div class="battery">
@@ -292,41 +359,106 @@ if st.session_state.get("last_prediction") is not None:
     """
     battery_area.markdown(battery_html, unsafe_allow_html=True)
 
-    if int(last_pred) == 1:
-        advice_area.warning("Possible malaria. Please visit a healthcare facility for diagnostic confirmation.")
+    advice_text, escalation_html = render_advice(last_pred, last_prob, last_prob_pct)
+    if last_pred == 1 or last_prob_pct >= 16:
+        advice_area.warning(advice_text)
     else:
-        advice_area.success("Low likelihood of malaria. If symptoms persist, seek medical care.")
+        advice_area.info(advice_text)
 
-    # feedback form submit inside form... uses session_state values for prediction or probability.
+    if escalation_html:
+        escalation_area.markdown(escalation_html, unsafe_allow_html=True)
+
+    # ----------------------
+    # Share result block
+    # ----------------------
+    share_text = f""" Malaria Risk Assessment
+━━━━━━━━━━━━━━━━━━━━━━━━━
+Result     : {'Malaria Likely' if int(last_pred) == 1 else 'No Malaria Detected'}
+Risk Level : {risk_label}
+Probability: {last_prob_pct}%
+━━━━━━━━━━━━━━━━━━━━━━━━━
+ This is NOT a medical diagnosis.
+Please visit a clinic or hospital to confirm.
+
+Generated by Malaria Risk Detector"""
+
+    with share_area.container():
+        st.code(share_text, language=None)
+        st.caption("Copy the text above and share via WhatsApp or show your doctor.")
+
+    # ----------------------
+    # Hospitals search
+    # ----------------------
+    if find_hospitals_btn:
+        loc_text = st.session_state.get("loc_input", "").strip()
+        if not loc_text:
+            hospitals_area.warning("Please enter your area or city first.")
+        elif not GEOPY_AVAILABLE:
+            hospitals_area.error("geopy is not installed. Add 'geopy' to your requirements.txt and redeploy.")
+        else:
+            with hospitals_area.container():
+                with st.spinner("Searching for nearby hospitals..."):
+                    lat, lon = geocode_location(loc_text)
+                    if lat is None:
+                        st.warning(f"Could not find location: '{loc_text}'. Try being more specific, e.g. 'Ikeja, Lagos'.")
+                    else:
+                        hospitals = find_nearby_hospitals(lat, lon)
+                        st.session_state["hospitals"] = hospitals
+                        if not hospitals:
+                            st.info("No hospitals found within 5 km. Try a broader area name, or search 'hospitals near [your area]' on Google Maps.")
+                        else:
+                            st.markdown(f"**Hospitals and clinics near {loc_text}:**")
+                            for h in hospitals:
+                                phone_line = f" ·  {h['phone']}" if h["phone"] else ""
+                                st.markdown(
+                                    f'<div class="hospital-card"> <strong>{h["name"]}</strong> &nbsp;·&nbsp; {h["type"]}{phone_line}</div>',
+                                    unsafe_allow_html=True,
+                                )
+                            st.caption("Data from OpenStreetMap. Results may not be exhaustive — always verify.")
+
+    elif st.session_state.get("hospitals"):
+        with hospitals_area.container():
+            st.markdown("**Previously found facilities:**")
+            for h in st.session_state["hospitals"]:
+                phone_line = f" ·  {h['phone']}" if h["phone"] else ""
+                st.markdown(
+                    f'<div class="hospital-card"> <strong>{h["name"]}</strong> &nbsp;·&nbsp; {h["type"]}{phone_line}</div>',
+                    unsafe_allow_html=True,
+                )
+
+    # ----------------------
+    # Feedback form
+    # ----------------------
     with feedback_area.container():
         with st.form("feedback_form"):
             st.write("Was this assessment helpful?")
             helpful = st.radio("", ["Select", "Yes", "No"], index=0, horizontal=True)
             st.write("Did you later confirm diagnosis at a clinic?")
-            clinic_result = st.selectbox("", ["Select", "I tested positive (malaria)", "I tested negative (not malaria)", "I did not check"])
+            clinic_result = st.selectbox("", [
+                "Select",
+                "I tested positive (malaria)",
+                "I tested negative (not malaria)",
+                "I did not check"
+            ])
             comment = st.text_area("Comments (optional)", value="", max_chars=500)
             submit = st.form_submit_button("Submit feedback")
 
             if submit:
-                # build record matching supabase table columns
                 rec = {
-                    "probability": int(st.session_state["last_prob_pct"]),  # integer percent
+                    "probability": int(st.session_state["last_prob_pct"]),
                     "prediction": "Malaria" if int(st.session_state["last_prediction"]) == 1 else "No Malaria",
                     "helpful": helpful if helpful != "Select" else "",
                     "clinic_result": clinic_result if clinic_result != "Select" else "",
                     "comment": comment,
                 }
-
-                # log and insert
-                log_debug("Attempting to insert to Supabase. Payload: " + json.dumps(rec, ensure_ascii=False))
+                log_debug("Attempting Supabase insert. Payload: " + json.dumps(rec))
                 success, resp = supabase_insert(rec)
                 if success:
                     st.success("Thanks, your feedback was submitted.")
-                    log_debug("Supabase insert succeeded: " + json.dumps(resp if isinstance(resp, dict) else {"resp": str(resp)}))
+                    log_debug("Supabase insert succeeded.")
                 else:
                     st.error("Could not submit feedback.")
                     log_debug("Supabase insert FAILED: " + json.dumps(resp if isinstance(resp, dict) else {"resp": str(resp)}))
-                    # fallback save locally
                     st.session_state["feedback_list"].append({
                         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
                         "probability_pct": st.session_state["last_prob_pct"],
@@ -337,7 +469,9 @@ if st.session_state.get("last_prediction") is not None:
                     })
                     st.info("Feedback saved locally for this session only.")
 
-# show local session feedback if present
+# ----------------------
+# Local session feedback table
+# ----------------------
 if st.session_state["feedback_list"]:
     st.markdown("---")
     st.subheader("Recent feedback (this session)")
