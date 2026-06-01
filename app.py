@@ -110,46 +110,10 @@ def supabase_insert(record: Dict[str, Any]) -> Tuple[bool, Dict[str, Any]]:
 # ----------------------
 # Nearby hospitals (OpenStreetMap, no API key)
 # ----------------------
-def geocode_location(location_text: str):
-    try:
-        url = "https://nominatim.openstreetmap.org/search"
-        params = {"q": location_text, "format": "json", "limit": 1}
-        headers = {"User-Agent": "MalariaRiskDetector/1.0"}
-        resp = requests.get(url, params=params, headers=headers, timeout=10)
-        results = resp.json()
-        if results:
-            return float(results[0]["lat"]), float(results[0]["lon"])
-        return None, None
-    except Exception as e:
-        print("Geocoding error:", e)
-        return None, None
-
-def find_nearby_hospitals(lat: float, lon: float, radius_m: int = 5000):
-    overpass_url = "https://overpass-api.de/api/interpreter"
-    query = f"""
-    [out:json];
-    (
-      node["amenity"="hospital"](around:{radius_m},{lat},{lon});
-      node["amenity"="clinic"](around:{radius_m},{lat},{lon});
-      node["amenity"="health_post"](around:{radius_m},{lat},{lon});
-    );
-    out body;
-    """
-    try:
-        response = requests.post(overpass_url, data=query, timeout=15)
-        data = response.json()
-        results = []
-        for element in data.get("elements", []):
-            tags = element.get("tags", {})
-            name = tags.get("name", "Unnamed facility")
-            amenity = tags.get("amenity", "facility").replace("_", " ").title()
-            phone = tags.get("phone", tags.get("contact:phone", ""))
-            results.append({"name": name, "type": amenity, "phone": phone})
-        results = [r for r in results if r["name"] != "Unnamed facility"] or results
-        return results[:5]
-    except Exception as e:
-        print("Overpass error:", e)
-        return []
+def get_hospital_maps_url(location_text: str) -> str:
+    import urllib.parse
+    query = urllib.parse.quote(f"hospitals near {location_text}")
+    return f"https://www.google.com/maps/search/{query}"
 
 
 # ----------------------
@@ -208,7 +172,7 @@ with right_col:
 
     st.subheader("Find nearby hospitals")
     location_input = st.text_input("Enter your area or city (e.g. Surulere, Lagos)", key="loc_input")
-    find_hospitals_btn = st.button("Search hospitals near me")
+    find_hospitals_btn = st.button("🗺️ Find hospitals near me")
     hospitals_area = st.empty()
 
     st.markdown("---")
@@ -289,11 +253,11 @@ def render_advice(pred: int, prob: float, prob_pct: int):
 
     if pred == 1:
         if prob_pct >= 61:
-            # HIGH RISK urgent escalation
-            advice = "High malaria risk detected. Do not wait — please go to a hospital or health centre today."
+            # HIGH RISK — urgent escalation
+            advice = " High malaria risk detected. Do not wait please go to a hospital or health centre today."
             escalation = f"""
             <div class="urgent-box">
-              <strong>Urgent:</strong> Your risk score is <strong>{prob_pct}%</strong>.
+              <strong> Urgent:</strong> Your risk score is <strong>{prob_pct}%</strong>.
               This is not a situation to monitor at home. Please seek care <em>today</em>, not tomorrow.
               Go to the nearest hospital and ask for a malaria rapid diagnostic test (RDT).
             </div>
@@ -314,13 +278,13 @@ def render_advice(pred: int, prob: float, prob_pct: int):
             advice = (
                 f"Your symptoms currently suggest a low malaria risk ({prob_pct}%). "
                 "This is not a medical clearance. If you have fever, body pain, or feel unwell, "
-                "still visit a pharmacy or clinic — malaria can be present before all symptoms appear."
+                "still visit a pharmacy or clinic malaria can be present before all symptoms appear."
             )
             escalation = ""
         else:
             # LOW-MEDIUM (16–29%) — more direct nudge
             advice = (
-                f"Your risk score is {prob_pct}% — that is low but not zero. "
+                f"Your risk score is {prob_pct}% that is low but not zero. "
                 "Low risk does not mean 'no malaria.' If you are experiencing any fever or general body weakness, "
                 "please visit a nearby clinic or pharmacy for a proper malaria test. Do not dismiss the symptoms."
             )
@@ -369,13 +333,13 @@ if st.session_state.get("last_prediction") is not None:
     # ----------------------
     # Share result block
     # ----------------------
-    share_text = f"""🦟 Malaria Risk Assessment
+    share_text = f"""Malaria Risk Assessment
 ━━━━━━━━━━━━━━━━━━━━━━━━━
 Result     : {'Malaria Likely' if int(last_pred) == 1 else 'No Malaria Detected'}
 Risk Level : {risk_label}
 Probability: {last_prob_pct}%
 ━━━━━━━━━━━━━━━━━━━━━━━━━
-⚠️ This is NOT a medical diagnosis.
+This is NOT a medical diagnosis.
 Please visit a clinic or hospital to confirm.
 
 Generated by Malaria Risk Detector"""
@@ -444,37 +408,22 @@ if find_hospitals_btn:
     if not loc_text:
         hospitals_area.warning("Please enter your area or city first.")
     else:
+        maps_url = get_hospital_maps_url(loc_text)
         with hospitals_area.container():
-            with st.spinner("Searching for nearby hospitals..."):
-                lat, lon = geocode_location(loc_text)
-                if lat is None:
-                    st.warning(
-                        f"Could not find '{loc_text}'. Try a well-known area name like 'Ikeja Lagos' or 'Wuse Abuja'."
-                    )
-                else:
-                    hospitals = find_nearby_hospitals(lat, lon)
-                    st.session_state["hospitals"] = hospitals
-                    if not hospitals:
-                        st.info(
-                            "No hospitals found within 5 km on OpenStreetMap. "
-                            "Try a broader area, or search 'hospitals near me' on Google Maps."
-                        )
-                    else:
-                        st.markdown(f"**Hospitals and clinics near {loc_text}:**")
-                        for h in hospitals:
-                            phone_line = f" ·  {h['phone']}" if h["phone"] else ""
-                            st.markdown(
-                                f'<div class="hospital-card"> <strong>{h["name"]}</strong> &nbsp;·&nbsp; {h["type"]}{phone_line}</div>',
-                                unsafe_allow_html=True,
-                            )
-                        st.caption("Data from OpenStreetMap. Results may not be exhaustive always verify.")
-
-elif st.session_state.get("hospitals"):
-    with hospitals_area.container():
-        st.markdown("**Previously found facilities:**")
-        for h in st.session_state["hospitals"]:
-            phone_line = f" ·  {h['phone']}" if h["phone"] else ""
             st.markdown(
-                f'<div class="hospital-card"> <strong>{h["name"]}</strong> &nbsp;·&nbsp; {h["type"]}{phone_line}</div>',
+                f"""
+                <div class="hospital-card">
+                  🗺️ <strong>Search results will open in Google Maps</strong><br>
+                  <small>Showing hospitals and clinics near <em>{loc_text}</em></small>
+                </div>
+                """,
                 unsafe_allow_html=True,
             )
+            st.link_button("Open hospitals near me on Google Maps", maps_url, type="primary")
+            st.caption("Google Maps gives the most accurate and up-to-date results for Nigerian hospitals.")
+
+elif st.session_state.get("loc_input", "").strip():
+    loc_text = st.session_state["loc_input"].strip()
+    maps_url = get_hospital_maps_url(loc_text)
+    with hospitals_area.container():
+        st.link_button("Open hospitals near me on Google Maps", maps_url, type="primary")
