@@ -8,6 +8,7 @@ from typing import Tuple, Dict, Any
 import requests
 import numpy as np
 import streamlit as st
+import streamlit.components.v1 as components
 
 
 
@@ -172,7 +173,7 @@ with right_col:
 
     st.subheader("Find nearby hospitals")
     location_input = st.text_input("Enter your area or city (e.g. Surulere, Lagos)", key="loc_input")
-    find_hospitals_btn = st.button("🗺️ Find hospitals near me")
+    find_hospitals_btn = st.button(" Find hospitals near me")
     hospitals_area = st.empty()
 
     st.markdown("---")
@@ -253,18 +254,18 @@ def render_advice(pred: int, prob: float, prob_pct: int):
 
     if pred == 1:
         if prob_pct >= 61:
-            # HIGH RISK — urgent escalation
-            advice = " High malaria risk detected. Do not wait please go to a hospital or health centre today."
+            # HIGH RISK urgent escalation
+            advice = "High malaria risk detected. Do not wait please go to a hospital or health centre today."
             escalation = f"""
             <div class="urgent-box">
-              <strong> Urgent:</strong> Your risk score is <strong>{prob_pct}%</strong>.
+              <strong>Urgent:</strong> Your risk score is <strong>{prob_pct}%</strong>.
               This is not a situation to monitor at home. Please seek care <em>today</em>, not tomorrow.
               Go to the nearest hospital and ask for a malaria rapid diagnostic test (RDT).
             </div>
             """
         else:
             # MEDIUM RISK
-            advice = "Moderate malaria risk detected. Visit a clinic for a confirmatory test as soon as possible."
+            advice = " Moderate malaria risk detected. Visit a clinic for a confirmatory test as soon as possible."
             escalation = f"""
             <div class="urgent-box">
               <strong>Note:</strong> A {prob_pct}% probability is not something to ignore.
@@ -282,7 +283,7 @@ def render_advice(pred: int, prob: float, prob_pct: int):
             )
             escalation = ""
         else:
-            # LOW-MEDIUM (16–29%) — more direct nudge
+            # LOW-MEDIUM (16–29%) more direct nudge
             advice = (
                 f"Your risk score is {prob_pct}% that is low but not zero. "
                 "Low risk does not mean 'no malaria.' If you are experiencing any fever or general body weakness, "
@@ -408,22 +409,28 @@ if find_hospitals_btn:
     if not loc_text:
         hospitals_area.warning("Please enter your area or city first.")
     else:
-        maps_url = get_hospital_maps_url(loc_text)
+        import urllib.parse
+        encoded = urllib.parse.quote(f"hospitals near {loc_text}")
+        embed_url = f"https://maps.google.com/maps?q={encoded}&output=embed"
         with hospitals_area.container():
-            st.markdown(
-                f"""
-                <div class="hospital-card">
-                  🗺️ <strong>Search results will open in Google Maps</strong><br>
-                  <small>Showing hospitals and clinics near <em>{loc_text}</em></small>
-                </div>
-                """,
-                unsafe_allow_html=True,
+            st.markdown(f"**Hospitals and clinics near {loc_text}:**")
+            components.html(
+                f'<iframe width="100%" height="400" frameborder="0" style="border-radius:8px;" '
+                f'src="{embed_url}" allowfullscreen></iframe>',
+                height=410,
             )
-            st.link_button("Open hospitals near me on Google Maps", maps_url, type="primary")
-            st.caption("Google Maps gives the most accurate and up-to-date results for Nigerian hospitals.")
+            st.caption("Powered by Google Maps. Results may vary by area coverage.")
 
 elif st.session_state.get("loc_input", "").strip():
     loc_text = st.session_state["loc_input"].strip()
-    maps_url = get_hospital_maps_url(loc_text)
+    import urllib.parse
+    encoded = urllib.parse.quote(f"hospitals near {loc_text}")
+    embed_url = f"https://maps.google.com/maps?q={encoded}&output=embed"
     with hospitals_area.container():
-        st.link_button("Open hospitals near me on Google Maps", maps_url, type="primary")
+        st.markdown(f"**Hospitals and clinics near {loc_text}:**")
+        components.html(
+            f'<iframe width="100%" height="400" frameborder="0" style="border-radius:8px;" '
+            f'src="{embed_url}" allowfullscreen></iframe>',
+            height=410,
+        )
+        st.caption("Powered by Google Maps. Results may vary by area coverage.")
