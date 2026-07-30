@@ -62,6 +62,7 @@ def load_model(path: str = MODEL_PATH):
         return None, f"Error loading model: {e}"
 
 model, model_err = load_model()
+st.write(type(model))
 
 # ----------------------
 # Feature order
