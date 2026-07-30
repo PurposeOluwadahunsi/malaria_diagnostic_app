@@ -50,20 +50,18 @@ st.markdown('<div class="header"> Malaria Risk Detector</div>', unsafe_allow_htm
 # ----------------------
 # Load model
 # ----------------------
+import joblib
+
 @st.cache_resource
-def load_model(path: str = MODEL_PATH):
+def load_model(path=MODEL_PATH):
     if not os.path.exists(path):
         return None, f"Model file not found at {path}"
+
     try:
-        with open(path, "rb") as f:
-            model = pickle.load(f)
+        model = joblib.load(path)
         return model, None
     except Exception as e:
         return None, f"Error loading model: {e}"
-
-model, model_err = load_model()
-st.write(type(model))
-
 # ----------------------
 # Feature order
 # ----------------------
