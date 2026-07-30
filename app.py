@@ -22,7 +22,7 @@ SUPABASE_ANON_KEY = os.getenv(
 )
 SUPABASE_ENDPOINT = f"{SUPABASE_URL}/rest/v1/malaria_feedback"
 
-MODEL_PATH = "Malaria_Diagnostic_Model.pkl"
+MODEL_PATH = "malaria_model_v2.joblib"
 
 st.set_page_config(page_title="Malaria Risk Detector", page_icon="🦟", layout="wide")
 
