@@ -2,3 +2,6 @@ streamlit==1.47.1
 numpy
 pandas
 requests
+geopy
+matplotlib
+seaborn
