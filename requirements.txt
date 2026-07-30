@@ -1,8 +1,8 @@
 streamlit==1.47.1
+scikit-learn==1.6.1
 numpy
 pandas
 requests
-geopy
 matplotlib
 seaborn
-scikit-learn
+geopy
