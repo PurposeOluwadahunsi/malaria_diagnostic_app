@@ -61,7 +61,7 @@ def load_model(path=MODEL_PATH):
         model = joblib.load(path)
         return model, None
     except Exception as e:
-        return None, f"Error loading model: {e}
+        return None, f"Error loading model: {e}"
 
 # THIS LINE MUST EXIST
 model, model_err = load_model()
