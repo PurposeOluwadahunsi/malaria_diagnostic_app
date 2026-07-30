@@ -1,5 +1,5 @@
 streamlit==1.47.1
-
+scikit-learn
 numpy
 pandas
 requests
